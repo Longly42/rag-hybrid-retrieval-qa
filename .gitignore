@@ -1,0 +1,9 @@
+data/raw/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+new.py
+README.md
