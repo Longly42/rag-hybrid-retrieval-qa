@@ -1,30 +1,52 @@
-# Python
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 .venv/
 venv/
+env/
 *.egg-info/
+.eggs/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# 数据和模型
-data/
+# ---------- 数据与模型 ----------
+# 原始抓取 HTML 体积大、可重新生成，不进 Git
 data/raw/
+# 清洗后的 Markdown 同样可重新生成，不进 Git
+data/processed/
+# 但 data/urls.txt 是抓取清单，体积小、有溯源价值，保留进 Git
+
+# 向量库 / 索引文件
 models/
 *.faiss
 *.chroma
 chroma_db/
+*.index
 
-# 本地配置
+# ---------- 本地配置 ----------
 .env
 .env.*
 !.env.example
+*.local
 
-# 编辑器 / 系统
+# ---------- 编辑器 / 系统 ----------
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+*.swp
 
-# 其他
+# ---------- 日志与临时文件 ----------
 *.log
+logs/
+tmp/
 new.py
+
+# ---------- 项目笔记 ----------
+# PROGRESS.md 如果你希望它进 Git（推荐，记录进度有价值），就注释掉下一行
+PROGRESS.md

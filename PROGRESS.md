@@ -9,11 +9,9 @@
 
 ## 0. 给接手的人
 
-### 0.1 三条铁律
+### 0.1 铁律
 
-1. **不要重复讲理论。** BM25 公式、RRF、Cross-Encoder 已经讲过一遍（要点见第 4 节 ADR），再讲一遍是浪费。要讲就讲「这一步为什么错」。
-2. **一次只推进一步。** 用户是边做边学，不是要一份完整代码。给「做什么 + 怎么验收」，不要给一整份可以复制粘贴的项目。
-3. **命令必须给 PowerShell 版本。** 环境是 Windows + VSCode + PowerShell，不是 Git Bash。曾给过 `source .venv/Scripts/activate` 导致走弯路。
+**命令必须给 PowerShell 版本。** 环境是 Windows + VSCode + PowerShell，不是 Git Bash。曾给过 `source .venv/Scripts/activate` 导致走弯路。
 
 ### 0.2 三十秒核实进度（不要相信第 2 节，跑一遍）
 
