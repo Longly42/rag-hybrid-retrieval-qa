@@ -1,27 +1,40 @@
-"""语料清洗与切分：data/raw/*.html → data/corpus.jsonl，一行一个 chunk。
+"""语料清洗与切分：data/raw/**/* → data/corpus.jsonl，一行一个 chunk。
 
 为什么不一一行一篇文档：
     检索的最小单位是 chunk，不是文档。一行一篇的话，第 3 步的重排、
     第 6 步的引用溯源全部做不了，等于推倒重来。
 
-为什么按 <section> 递归：
+为什么按 <section> 递归（HTML）：
     Sphinx 用 <section id=...> 把「标题 + 该标题下的内容」包成一个整体，
     嵌套 section 就是天然的标题树。递归进去就拿到了 title_path。
 
+支持哪些格式：
+    html  —— BeautifulSoup + 站点 profile（Sphinx 那套 section/dl/dt 逻辑）
+    rst   —— src/ingest/formats.py，Sphinx 源文件，Django 的 _sources 就是
+    md    —— src/ingest/formats.py，GitHub 上的中文文档仓
+    text  —— 兜底，按空行分段
+    格式靠**内容嗅探**判定，不看扩展名。实测反例：Django 的源文件叫 .txt 内容
+    是 rst；CS-Notes 的 README.md 里混着 HTML 标签。
+
 URL 的来源：
-    身份校验用页面里的 <link rel="canonical">，但展示地址用 urls.txt 里的。
-    因为 canonical 会丢掉 /zh-cn 语言前缀。
+    HTML 用页面里的 <link rel="canonical">；但展示地址要用带语言前缀的，
+    因为 canonical 会丢掉 /zh-cn。
+    rst / md 没有 canonical，从 manifest.jsonl 取（crawl 落下来的 path→url 映射），
+    没有 manifest 时按 raw 的目录结构反推。
 
 扫描范围：
-    扫 data/raw/ 下所有 *.html，不预设站点、不预设栏目。以后往 raw 里丢新站的
-    页面也能直接跑：域名不在 SITE_PROFILES 里就用 DEFAULT_PROFILE 兜底，
-    每个 chunk 都会带上 section 字段（从 URL 路径推断的栏目名），
-    要分域检索时用 --section 过滤，不用改代码。
+    递归扫 data/raw/ 下所有文件，不预设站点、不预设栏目。raw 的目录约定是
+    「格式 / 域名 / 源路径」三层，解析时这三段分别变成 format / site / source_path。
+
+同一篇文档被抓了两份（html 和 rst）怎么办：
+    按「域名 + 路径」归一化后只留一份，优先 rst > md > html > text。
+    源码比渲染后的页面干净，这是唯一需要人为排序的地方。
 
 用法：
     python -m src.ingest.parse                    # 扫全部，不筛栏目
     python -m src.ingest.parse --limit 10         # 只切前 10 篇，验收用
     python -m src.ingest.parse --section library  # 只要 library 栏目
+    python -m src.ingest.parse --format rst       # 只处理某种格式
     python -m src.ingest.parse --prefix /library/ # 按路径前缀筛（旧参数，保留）
     python -m src.ingest.parse --keep-toc         # 不丢弃目录页
 """
@@ -37,11 +50,15 @@ from urllib.parse import urlparse #导入urlparse模块用于解析url
 
 from bs4 import BeautifulSoup #导入BeautifulSoup模块用于解析html文件
 
+from .formats import Block, decode, detect_format, parse_markup
+from .layout import url_of_rel
+
 #解释下列变量：ROOT：项目根目录，RAW_DIR：原始数据目录，URLS_FILE：URL文件路径，OUT_FILE：输出文件路径
 ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = ROOT / "data" / "raw"
 URLS_FILE = ROOT / "data" / "urls.txt"
 OUT_FILE = ROOT / "data" / "corpus.jsonl"
+MANIFEST_FILE = ROOT / "data" / "manifest.jsonl"
 
 # ---------- 切分参数 ----------
 CHUNK_MAX = 600        # 单 chunk 字符上限
@@ -56,14 +73,29 @@ CODE_MAX = 1500        # 代码块超过此长度 → 按行折开
 TOC_MAX_CHARS = 800    # 正文超过这个长度就不当目录页看
 TOC_LINK_RATIO = 0.5   # 链接文字占正文的比例超过它，判为目录页
 
+# ---------- 格式优先级 ----------
+# 同一篇文档有多份时，留哪份。源码 > 渲染后的 HTML，因为源码里没有导航、
+# 没有 headerlink、没有 § 锚点，标题层级是显式的。
+FORMAT_PRIORITY = {"rst": 3, "md": 2, "html": 1, "text": 0}
+
 # ---------- 正则 ----------
 #解释下列变量：HEADING_RE：标题正则表达式，SENT_SPLIT_RE：句子分割正则表达式，VERSION_RE：版本号正则表达式
 HEADING_RE = re.compile(r"^h[1-6]$")               
 SENT_SPLIT_RE = re.compile(r"(?<=[。！？；!?;])|(?<=[.!?])\s+|\n+")
 VERSION_RE = re.compile(r"Python\s+([\d.]+)")
-# 路径里的语言代码段（zh-cn / en-us / ja）与版号段（3 / 3.15 / v2），推断栏目名时跳过
-LANG_SEG_RE = re.compile(r"^[a-z]{2}(-[a-z]{2})?$")
+# 路径里的语言代码段（zh-cn / zh-hans / en-us / ja）与版号段（3 / 3.15 / v2），推断栏目名时跳过
+# 语言段用白名单，不能用「两三个小写字母」这种形状规则 ——
+# Django 的 ref 目录会被形状规则当成语言码跳掉，section 就从 ref 变成 models。
+# 语言码是可枚举的，栏目名不是。
+LANG_SEG_RE = re.compile(
+    r"^(zh|en|ja|ko|fr|de|es|pt|ru|it|nl|pl|tr|ar|hi|vi|th|id)([-_][a-zA-Z]{2,8})?$"
+)
 VER_SEG_RE = re.compile(r"^v?\d+(\.\d+)*$")
+# GitHub raw 的路径是 /{owner}/{repo}/{branch}/...，前两段合起来才是「项目」，
+# 只取第一段会得到用户名，作为 section 没有意义
+GITHUB_RAW_HOST = "raw.githubusercontent.com"
+# 文档路径的扩展名，算 doc_key 时要剥掉
+DOC_EXT_RE = re.compile(r"\.(html?|txt|md|rst|text)$", re.I)
 
 # 站点配置，因为不同站点的 HTML 结构不同
 # 新增一个站：在这里加一条 {域名: {body: 正文选择器, drop: 要删的噪声选择器}} 即可，
@@ -75,6 +107,12 @@ SITE_PROFILES = {
         # canonical 会丢掉语言前缀，这里记下正确的语言段，拼引用地址时补回去。
         # 不补的话，编号错位的那些页会拿到英文地址，引用溯源会跳到英文页。
         "lang_prefix": "/zh-cn",
+    },
+    "docs.djangoproject.com": {
+        # Django 用自建模板，没有 div.body，正文容器是 article
+        "body": "article",
+        "drop": ["div.sidebar", "nav", "div#doc-versions", "div#custom-doc-nav"],
+        "lang_prefix": "/zh-hans",
     },
 }
 
@@ -102,6 +140,29 @@ def read_urls() -> list[str]:
     if not URLS_FILE.exists():
         return []
     return [ln.strip() for ln in URLS_FILE.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+def load_manifest() -> dict[str, str]:
+    """读 data/manifest.jsonl，返回 {raw 相对路径: 源 URL}。
+
+    manifest 是 crawl.py 落下来的抓取账本。没有它也能跑（URL 从目录结构反推），
+    但有它才能保证引用地址和真实请求地址一字不差 —— 尤其是 Django 那种
+    目录式 URL，反推出来会少一个结尾斜杠。
+    """
+    if not MANIFEST_FILE.exists():
+        return {}
+    out: dict[str, str] = {}
+    for ln in MANIFEST_FILE.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            rec = json.loads(ln)
+        except json.JSONDecodeError:
+            continue           # 半行写入的坏记录，跳过就好，不该让整次解析失败
+        p, u = rec.get("path"), rec.get("url")
+        if p and u:
+            out[p.replace("\\", "/")] = u
+    return out
 
 def pick_profile(url: str) -> tuple[dict, bool]:
     """根据 URL 选择站点配置。
@@ -134,9 +195,35 @@ def section_of(url: str) -> str:
     parts = [p for p in urlparse(url).path.split("/") if p]
     if parts and "." in parts[-1]:
         parts = parts[:-1]
+    # GitHub 单独处理：section 取 owner__repo，否则会变成用户名（一个用户下十几个仓，
+    # 全被归到同一个栏目，分域统计就没意义了）。
+    # github.com/{owner}/{repo}/blob/{branch}/... 要前四段才认得出是仓库，
+    # 只按前两段合并会把 github.com/{owner__repo}/README 这种误伤。
+    host = urlparse(url).netloc
+    if host == "raw.githubusercontent.com" and len(parts) >= 2:
+        return f"{parts[0]}__{parts[1]}"
+    if host == "github.com" and len(parts) >= 4 and parts[2] in ("blob", "tree", "raw"):
+        return f"{parts[0]}__{parts[1]}"
     while parts and (LANG_SEG_RE.match(parts[0]) or VER_SEG_RE.match(parts[0])):
         parts = parts[1:]
     return parts[0] if parts else ""
+
+def doc_key(url: str) -> str:
+    """文档身份：域名 + 路径，去掉扩展名和尾斜杠。
+
+    两个用途：
+      1. 当 doc_id —— 它锚在 URL 上，不再依赖「文件在清单里排第几」，
+         所以重爬多少次都不会错位（编号错位那个坑到此为止）。
+      2. 判断「html 和 rst 是不是同一篇」—— 渲染地址和源文件地址去掉扩展名后
+         是同一条路径，靠它就能识别出双份。
+    """
+    p = urlparse(url)
+    path = DOC_EXT_RE.sub("", p.path).rstrip("/")
+    return f"{p.netloc}{path}"
+
+def site_of(url: str) -> str:
+    """域名。分域建索引、分域评测时按它筛。"""
+    return urlparse(url).netloc
 
 def localized_url(url: str) -> str:
     """把 canonical 丢掉的语言前缀补回来，得到能直接打开的中文地址。
@@ -299,6 +386,89 @@ def iter_blocks(node, path: tuple[str, ...], out: list[tuple[tuple[str, ...], st
             if text and not is_noise(text):
                 out.append((path, "text", text + "\n"))
 
+# ---------- 各格式 → 统一的 blocks ----------
+# 这一段是本文件唯一「和格式有关」的地方。三种格式各有一个抽取函数，
+# 但全部返回同一种形状 [(title_path, kind, text)]，后面的打包逻辑完全共用。
+# 加一种格式 = 在这里加一个分支，pack()/emit() 一个字都不用改。
+
+def blocks_from_html(path: Path, min_page_chars: int,
+                     keep_toc: bool) -> tuple[list[Block], dict, str]:
+    """HTML：canonical → profile → section 递归抽块。返回 (blocks, meta, 跳过原因)。"""
+    soup = BeautifulSoup(path.read_bytes(), "lxml")
+    url = canonical_url(soup)
+    if not url:
+        return [], {}, "canonical 缺失，无法确认这页是谁"
+
+    profile, known = pick_profile(url)
+    title, version = page_meta(soup)
+    body = soup.select_one(profile["body"])
+    if body is None:
+        return [], {}, "正文容器未匹配，需要给这个域名加 profile"
+
+    clean(soup, profile)
+
+    # 注意：clean 会删掉 a.headerlink，那些 ¶ 就在里面。必须在 clean 之后算正文长度，
+    # 否则目录页的正文会被 ¶ 撑长，判断失准。
+    page_chars = len(body.get_text())
+    if page_chars < min_page_chars:
+        return [], {}, f"正文 < {min_page_chars} 字符（目录页/存根页）"
+
+    if not keep_toc and looks_like_toc(body):
+        return [], {}, "只有链接的目录页"
+
+    blocks: list[tuple[tuple[str, ...], str, str]] = []
+    iter_blocks(body, (), blocks)
+    if not blocks:
+        return [], {}, "抽不出任何内容块"
+
+    meta = {
+        "url": url,
+        "title": title,
+        "version": version,
+        "site_known": known,
+        "page_chars": page_chars,
+    }
+    return blocks, meta, ""
+
+def blocks_from_markup(path: Path, fmt: str, url: str,
+                       min_page_chars: int) -> tuple[list[Block], dict, str]:
+    """rst / md / text：丢给 formats.py，抽出来的块形状和 HTML 完全一致。
+
+    title 传空字符串，让文档自己的第一个一级标题当根 ——
+    md/rst 的文件名往往是 index / models 这类无意义的词，而文档里的
+    `# 简介`、`Models` 才是真正的主题。没有标题时用路径末段兜底。
+    """
+    text = decode(path.read_bytes())
+    blocks = parse_markup(text, fmt, "")
+
+    # 没有标题的文档：path 全是空元组，用文件名补上，否则 title_path 会是空串
+    if blocks and all(not p for p, _, _ in blocks):
+        stem = path.stem or "untitled"
+        blocks = [((stem,), k, t) for _, k, t in blocks]
+
+    page_chars = sum(len(t) for _, _, t in blocks)
+    if page_chars < min_page_chars:
+        return [], {}, f"正文 < {min_page_chars} 字符"
+
+    # 版本号对 md/rst 没有 <title> 可取，从正文里找「Python 3.x 文档」这种字样。
+    # 找不到就留空，不要瞎猜。
+    m = VERSION_RE.search(text[:4000])
+    meta = {
+        "url": url,
+        "title": blocks[0][0][0] if blocks and blocks[0][0] else path.stem,
+        "version": m.group(1) if m else "",
+        "site_known": True,          # 源码格式没有 profile 概念，谈不上「未登记」
+        "page_chars": page_chars,
+    }
+    return blocks, meta, ""
+
+def url_from_layout(path: Path, raw_dir: Path) -> str:
+    """按 raw 的目录约定反推源 URL。真正的规则在 layout.py，这里只做路径换算。"""
+    try:
+        return url_of_rel(path.relative_to(raw_dir).as_posix())
+    except ValueError:
+        return ""
+
 # ---------- 打包成 chunk-------------
 
 def split_sentences(text: str) -> list[str]:
@@ -390,57 +560,40 @@ def pack(pieces: list[tuple[str, str]]) -> list[str]:
 
 # ---------------- 主流程---------------
 
-def parse_one(path: Path, min_page_chars: int = MIN_PAGE_CHARS,
-              keep_toc: bool = False) -> tuple[list[dict] | None, str, str]:
-    ''' 解析一个文件
+def chunks_from_blocks(blocks: list[Block], meta: dict, fmt: str,
+                       source_path: str) -> list[dict]:
+    """把 blocks 按标题路径分组、打包成 chunk，并补上所有元数据字段。
 
-    返回 (chunk 列表, canonical_url, 跳过原因)。
-    chunk 列表为 None 时，第三个值是跳过原因，供主流程汇总打印。
-    '''
-    soup = BeautifulSoup(path.read_bytes(), "lxml")
-    url = canonical_url(soup)
-    if not url:
-        return None, "", "canonical 缺失，无法确认这页是谁"
-
-    profile, known = pick_profile(url)
-    title, version = page_meta(soup)
-    body = soup.select_one(profile["body"])
-    if body is None:
-        return None, url, "正文容器未匹配，需要给这个域名加 profile"
-
-    clean(soup, profile)
-
-    # 注意：clean 会删掉 a.headerlink，那些 ¶ 就在里面。必须在 clean 之后算正文长度，
-    # 否则目录页的正文会被 ¶ 撑长，判断失准。
-    if len(body.get_text()) < min_page_chars:
-        return None, url, f"正文 < {min_page_chars} 字符（目录页/存根页）"
-
-    if not keep_toc and looks_like_toc(body):
-        return None, url, "只有链接的目录页"
-
-    blocks: list[tuple[tuple[str, ...], str, str]] = []
-    iter_blocks(body, (), blocks)
-    if not blocks:
-        return None, url, "抽不出任何内容块"
-
-    doc_id = path.stem
+    分组的意义：同一个 title_path 下的段落和代码块，是同一个检索单元。
+    分开打包的话，「函数签名 + 它的说明」会被切成两半。
+    """
+    url = meta["url"]
+    key = doc_key(url)
     section = section_of(url)
+    site = site_of(url)
+    page_title = meta.get("title", "")
+    version = meta.get("version", "")
+    known = meta.get("site_known", True)
+
     chunks: list[dict] = []
     group_path, group_pieces = None, []
 
     def emit(p: tuple[str, ...], pieces: list[tuple[str, str]]) -> None:
         if not pieces:
             return
-        path_str = " > ".join(x for x in p if x) or title
+        path_str = " > ".join(x for x in p if x) or page_title
         for text in pack(pieces):
             chunks.append({
-                "chunk_id": f"{doc_id}-{len(chunks):03d}",
-                "doc_id": doc_id,
-                "source_file": path.name,
+                "chunk_id": f"{key}-{len(chunks):03d}",
+                "doc_id": key,
+                "source_file": message_path(source_path),
+                "source_path": source_path,
+                "format": fmt,
+                "site": site,
                 "section": section,
                 "site_known": known,
                 "url": url,
-                "page_title": title,
+                "page_title": page_title,
                 "title_path": path_str,
                 "text": text,
                 "char_len": len(text),
@@ -465,7 +618,52 @@ def parse_one(path: Path, min_page_chars: int = MIN_PAGE_CHARS,
         uniq.append(c)
     for c in uniq:
         c.pop("_digest", None)
-    return uniq, url, ""
+    return uniq
+
+def message_path(source_path: str) -> str:
+    """source_file 只保留文件名，方便在报错里指认是哪一篇。"""
+    return source_path.rsplit("/", 1)[-1]
+
+def parse_one(path: Path, raw_dir: Path, manifest: dict[str, str],
+              min_page_chars: int = MIN_PAGE_CHARS,
+              keep_toc: bool = False) -> tuple[list[dict] | None, dict, str]:
+    ''' 解析一个文件
+
+    返回 (chunk 列表, meta, 跳过原因)。
+    chunk 列表为 None 时，第三个值是跳过原因，供主流程汇总打印。
+    '''
+    rel = path.relative_to(raw_dir).as_posix()
+    sniffed = detect_format(path.read_bytes())
+
+    # raw 的第一层目录（格式）是抓取时确定的，比嗅探权威。
+    # 嗅探的弱结论是 text —— 那只是「没找到强特征」，不代表内容不是 rst：
+    # Django 的 howto/delete-app 只有标题加三段话，一个指令都没有，嗅探必然给 text。
+    # 但嗅探出「明确的另一种格式」时要推翻目录层，那是真的存错了。
+    layer = rel.split("/")[0]
+    fmt = layer if (layer in FORMAT_PRIORITY and sniffed == "text") else sniffed
+    if fmt == "text" and layer == "text":
+        fmt = "text"
+
+    if fmt == "html":
+        blocks, meta, why = blocks_from_html(path, min_page_chars, keep_toc)
+        if not blocks:
+            return None, {}, why
+        # 展示地址：优先 urls.txt 里那一条（带语言前缀），退回 canonical 补前缀
+        url = manifest.get(rel) or localized_url(meta["url"])
+    else:
+        # rst / md / text 没有 canonical，URL 只能靠 manifest 或目录结构
+        url = manifest.get(rel) or url_from_layout(path, raw_dir)
+        if not url:
+            return None, {}, "推不出源 URL（目录结构不符合 格式/域名/路径）"
+        blocks, meta, why = blocks_from_markup(path, fmt, url, min_page_chars)
+        if not blocks:
+            return None, {}, why
+
+    meta["url"] = url
+    chunks = chunks_from_blocks(blocks, meta, fmt, rel)
+    if not chunks:
+        return None, meta, "打包后没有超过长度下限的 chunk"
+    return chunks, meta, ""
 
 def main() -> None:
     ''' 主函数 '''
@@ -474,74 +672,76 @@ def main() -> None:
     ap.add_argument("--out", default=str(OUT_FILE), help="输出路径")
     ap.add_argument("--prefix", default=None, help="只收路径含该前缀的页，如 /library/")
     ap.add_argument("--section", default=None, help="只收某个栏目，如 library / tutorial")
+    ap.add_argument("--format", dest="fmt", default=None,
+                    help="只处理某种格式：html / rst / md / text")
     ap.add_argument("--min-page-chars", type=int, default=MIN_PAGE_CHARS,
                     help=f"整页正文低于此值丢弃，默认 {MIN_PAGE_CHARS}")
     ap.add_argument("--keep-toc", action="store_true", help="保留只有链接的目录页")
     args = ap.parse_args()
 
-    files = sorted(RAW_DIR.glob("*.html"))
+    # 递归扫，不再限定 *.html —— raw 现在是「格式/域名/路径」三层结构
+    files = sorted(p for p in RAW_DIR.rglob("*") if p.is_file())
+    if args.fmt:
+        # 按格式筛的时候不能只看扩展名（Django 的 .txt 是 rst），要先嗅探再筛
+        files = [p for p in files if detect_format(p.read_bytes()) == args.fmt]
     if args.limit:
         files = files[: args.limit]
     if not files:
-        sys.exit("data/raw/ 下没有 HTML，先跑 crawl.py")
+        sys.exit("data/raw/ 下没有可解析的文件，先跑 crawl.py")
 
-    expected = read_urls()
-    kept, skipped, mismatch = [], [], []
-    seen_urls: dict[str, str] = {}   # canonical_url → 第一次出现的 doc_id，用来跨文件去重
-    unknowns: dict[str, int] = {}    # 未登记域名 → 篇数
-    total_chars, code_chunks, too_short = 0, 0, 0
+    manifest = load_manifest()
+    expected = set(read_urls())
+
+    # 先全部解析，再决定同一篇文档留哪份格式。
+    # 不边解析边去重，是因为文件按路径排序，html/ 排在 rst/ 前面 ——
+    # 先到的会是渲染页，后到的才是更干净的源码，边处理边留就留反了。
+    results: list[tuple[str, int, list[dict], dict]] = []
+    skipped: list[tuple[str, str, str]] = []
+    unknowns: dict[str, int] = {}
+    not_in_urls = 0
 
     for i, path in enumerate(files):
-        idx = int(path.stem) if path.stem.isdigit() else 0
-        guess = expected[idx - 1] if 0 < idx <= len(expected) else ""
-
-        chunks, url, why = parse_one(path, args.min_page_chars, args.keep_toc)
+        rel = path.relative_to(RAW_DIR).as_posix()
+        chunks, meta, why = parse_one(path, RAW_DIR, manifest, args.min_page_chars, args.keep_toc)
         if not chunks:
-            skipped.append((path.stem, url or guess, why))
+            skipped.append((rel, meta.get("url", ""), why))
             continue
 
+        url = meta["url"]
         prefix = args.prefix
         if prefix and prefix not in urlparse(url).path:
-            skipped.append((path.stem, url, f"不在前缀 {prefix} 内"))
+            skipped.append((rel, url, f"不在前缀 {prefix} 内"))
             continue
         if args.section and chunks[0]["section"] != args.section:
-            skipped.append((path.stem, url, f"栏目是 {chunks[0]['section'] or '根'}，不是 {args.section}"))
+            skipped.append((rel, url, f"栏目是 {chunks[0]['section'] or '根'}，不是 {args.section}"))
             continue
-
-        # 跨文件去重：同一个 canonical URL 被抓了两次（重爬、编号变动都会造成），
-        # 只保留第一份，后面的直接丢。判断依据是 URL 而不是文件名 —— 文件名会变，URL 不会。
-        if url in seen_urls:
-            skipped.append((path.stem, url, f"重复 URL，内容已在 {seen_urls[url]}"))
-            continue
-        seen_urls[url] = path.stem
+        if expected and url not in expected:
+            not_in_urls += 1
 
         if not chunks[0]["site_known"]:
-            host = urlparse(url).netloc
+            host = site_of(url)
             unknowns[host] = unknowns.get(host, 0) + 1
 
-        if guess and basename(guess) != basename(url):
-            mismatch.append((path.stem, guess, url))
-            # 编号对不上，说明 urls.txt 那个位置已经不是这一页了，不能拿它当展示地址。
-            # 退回 canonical，但要把语言前缀补回去，否则引用会跳到英文页。
-            fixed = localized_url(url)
-            for c in chunks:
-                c["url"] = fixed
-        elif guess:
-            for c in chunks:
-                c["url"] = guess
-        else:
-            fixed = localized_url(url)
-            for c in chunks:
-                c["url"] = fixed
+        results.append((doc_key(url), FORMAT_PRIORITY.get(chunks[0]["format"], 0), chunks, meta))
 
-        for c in chunks:
-            total_chars += c["char_len"]
-            code_chunks += 1 if c["has_code"] else 0
-            too_short += 1 if c["char_len"] < 120 else 0
-        kept.extend(chunks)
-        
         if (i + 1) % 50 == 0:
-            print(f"  ... 已处理 {i + 1}/{len(files)} 篇，累计 {len(kept)} chunk")
+            print(f"  ... 已处理 {i + 1}/{len(files)} 篇")
+
+    # 同一篇文档只留优先级最高的一份：rst > md > html > text
+    best: dict[str, tuple[int, list[dict]]] = {}
+    replaced: list[tuple[str, str, str]] = []
+    for key, prio, chunks, _ in results:
+        fmt = chunks[0]["format"]
+        if key in best and best[key][0] >= prio:
+            replaced.append((key, fmt, best[key][1][0]["format"]))
+            continue
+        if key in best:
+            replaced.append((key, best[key][1][0]["format"], fmt))
+        best[key] = (prio, chunks)
+
+    kept: list[dict] = []
+    for _, (_, chunks) in best.items():
+        kept.extend(chunks)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -551,12 +751,32 @@ def main() -> None:
 
     docs = len({c["doc_id"] for c in kept})
     lens = sorted(c["char_len"] for c in kept)
+    total_chars = sum(lens)
+    code_chunks = sum(1 for c in kept if c["has_code"])
+    too_short = sum(1 for c in kept if c["char_len"] < 120)
+
     print(f"\n完成：{docs} 篇 → {len(kept)} 个 chunk，写入 {out}")
     if lens:
         print(f"字符数：平均 {total_chars // len(lens)}，中位 {lens[len(lens) // 2]}，"
               f"p90 {lens[int(len(lens) * 0.9)]}，max {lens[-1]}")
         print(f"含代码的 chunk：{code_chunks} 个（{code_chunks * 100 // len(lens)}%）")
         print(f"短于 120 字符的 chunk：{too_short} 个")
+
+    # 按格式汇总：这是「加了新格式到底进没进语料」的直接证据
+    by_fmt: dict[str, int] = {}
+    for c in kept:
+        by_fmt[c["format"]] = by_fmt.get(c["format"], 0) + 1
+    print("\n按格式：" + "，".join(f"{k} {v} chunk" for k, v in sorted(by_fmt.items())))
+
+    # 按域名汇总：分域建索引之前的规模预检
+    by_site: dict[str, list[int]] = {}
+    for c in kept:
+        by_site.setdefault(c["site"], []).append(c["char_len"])
+    if len(by_site) > 1:
+        print("\n按域名：")
+        for s, ls in sorted(by_site.items(), key=lambda kv: -len(kv[1])):
+            n = len({c["doc_id"] for c in kept if c["site"] == s})
+            print(f"  {s:<26} {n:>4} 篇  {len(ls):>5} chunk  中位 {sorted(ls)[len(ls) // 2]} 字")
 
     # 按栏目汇总：以后加语料时，一眼能看出各栏目各占多少，混没混进来别的东西
     by_section: dict[str, list[int]] = {}
@@ -567,31 +787,33 @@ def main() -> None:
         for sec, lens_ in sorted(by_section.items(), key=lambda kv: -len(kv[1])):
             docs_n = len({c["doc_id"] for c in kept if (c["section"] or "(根)") == sec})
             print(f"  {sec:<12} {docs_n:>4} 篇  {len(lens_):>5} chunk  中位 {sorted(lens_)[len(lens_) // 2]} 字")
-    
-    print(f"跳过 {len(skipped)} 篇")
+
+    print(f"\n跳过 {len(skipped)} 篇")
     if skipped:
         # 按原因分组，比逐条列 260 行有用得多
         reasons: dict[str, list[tuple[str, str]]] = {}
-        for doc_id, u, why in skipped:
-            reasons.setdefault(why, []).append((doc_id, u))
+        for rel, u, why in skipped:
+            reasons.setdefault(why, []).append((rel, u))
         for why, items in sorted(reasons.items(), key=lambda kv: -len(kv[1])):
             print(f"  {len(items):>3} 篇  {why}")
-            for doc_id, u in items[:4]:
-                print(f"        {doc_id} {basename(u) or '?'}")
+            for rel, u in items[:4]:
+                print(f"        {rel}")
             if len(items) > 4:
                 print(f"        ... 还有 {len(items) - 4} 篇")
+
+    # 双份文档被替换掉的记录。这条数必须能被解释清楚：
+    # 每一对都是「同一篇的 html 和 rst」，留下的是优先级高的那份
+    if replaced:
+        print(f"\n同一篇存在多种格式，按优先级取舍 {len(replaced)} 次（留 rst > md > html）")
 
     if unknowns:
         print("\n[提示] 以下域名没有登记 profile，用的是通用选择器，建议补一条：")
         for host, n in unknowns.items():
             print(f"  {host}  {n} 篇")
 
-    if mismatch:
-        print(f"\n[警告] {len(mismatch)} 篇的编号与页面自称的 URL 对不上：")
-        for doc_id, guess, real in mismatch[:8]:
-            print(f"  {doc_id}  urls.txt 期望 {basename(guess)}，页面实际是 {basename(real)}")
-        print("  说明 raw 里有错位文件：编号由列表位置决定，重爬后位置一变就错。")
-        print("  不影响切分（身份以 canonical 为准），但补语料前建议先把 crawl.py 的编号绑到 URL 上。")
+    if not_in_urls:
+        print(f"\n[提示] {not_in_urls} 篇的 URL 不在 data/urls.txt 里 —— "
+              f"可能是直接放进去的样本，也可能是 urls.txt 没跟着更新。")
 
 if __name__ == "__main__":
     main()

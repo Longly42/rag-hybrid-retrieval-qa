@@ -52,18 +52,30 @@ RRF 只用排名不用分数，是因为两路分数不同量纲（BM25 无上�
 ```
 .
 ├── data/
-│   ├── raw/            # 原始 HTML，一文件一篇（不入库）
-│   ├── urls.txt        # 目录页探测出的链接清单，doc_id 顺序的唯一来源（不入库，可重建）
-│   └── corpus.jsonl    # 清洗后语料，一行一文档（不入库，可重建）
+│   ├── raw/            # 原始文件，按「格式/域名/源路径」三层存（不入库）
+│   │                   #   html/docs.python.org/3/library/bisect.html
+│   │                   #   html/docs.djangoproject.com/zh-hans/5.2/topics/db/models.html
+│   │                   #   md/github.com/jackfrued__Python-100-Days/Day01-20/01.初识Python.md
+│   ├── samples/rst/    # 3 篇 rst 原文，只用来测 formats.py 的 rst 解析（入库）
+│   ├── urls/           # 每个抓取源一份链接清单，互不覆盖（入库）
+│   ├── urls.txt        # 上面所有清单的并集，供 parse 校验（入库）
+│   ├── manifest.jsonl  # 抓取账本：请求地址 → 落地路径，断点续爬靠它（入库）
+│   └── corpus.jsonl    # 清洗后语料，一行一 chunk（不入库，可重建）
 ├── src/
-│   ├── ingest/         # crawl.py 抓取落盘；parse.py 清洗为 jsonl
+│   ├── ingest/
+│   │   ├── crawl.py    # 多源抓取：目录页 / GitHub 仓库 / Sphinx 源码
+│   │   ├── parse.py    # 统一调度，打包成 chunk
+│   │   ├── formats.py  # 格式探测 + rst/md/纯文本解析
+│   │   └── layout.py   # raw 的目录约定，crawl 与 parse 共用一个实现
 │   └── retrieval/      # bm25.py 检索实现（待写）
-├── scripts/            # 一次性入口脚本
+├── scripts/            # 一次性入口脚本（含 raw 目录迁移）
 ├── experiments.md      # 指标流水账
 └── PROGRESS.md         # 交接文档
 ```
 
-`src/` 放可复用库，`scripts/` 放入口脚本。数据全部不入库，靠 `crawl.py` + `parse.py` 重建——原因见 PROGRESS.md 的 ADR-9。
+`doc_id` 由「域名 + 路径」派生，锚在 URL 上，不再依赖文件在清单里排第几——早期用位置编号，重爬一次就整批错位，这个坑已经踩过两次。
+
+`src/` 放可复用库，`scripts/` 放入口脚本。抓下来的原始文件和切好的语料都不入库，靠 `crawl.py` + `parse.py` 重建——原因见 PROGRESS.md 的 ADR-9；清单和账本体积小、有溯源价值，进 Git。
 
 ## 相关
 
