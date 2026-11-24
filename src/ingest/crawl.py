@@ -28,7 +28,15 @@ URLS_FILE = ROOT / "data" / "urls.txt"  # URL 列表文件
 
 # 目标：Python 官方中文教程目录页
 # 这个目录列出 Tutorial 的所有章节，每章是一个独立 HTML 页面
-CATALOG_URL = "https://docs.python.org/zh-cn/3/tutorial/"
+'''
+后注：
+第一次语料搜集选的是：https://docs.python.org/zh-cn/3/tutorial/，即原版python教程
+共16篇
+第二次选取的是：https://docs.python.org/zh-cn/3/library/，python标准库的内容
+共250篇
+'''
+#第一次:CATALOG_URL = "https://docs.python.org/zh-cn/3/tutorial"
+CATALOG_URL = "https://docs.python.org/zh-cn/3/library/"
 
 # Python 文档的章节链接在 toctree-wrapper 容器内
 LINK_SELECTOR = "div.toctree-wrapper a"  
@@ -37,7 +45,12 @@ LINK_SELECTOR = "div.toctree-wrapper a"
 SAME_DOMAIN_ONLY = True
 
 # 只抓 tutorial 路径下的页面，避免误抓 library/reference 等其他部分
-PATH_PREFIX =  "/zh-cn/3/tutorial/"
+"""
+后注：更改爬取语料同一位置也要改PATH_PREFIX
+第一次：PATH_PREFIX =  "/zh-cn/3/tutorial/"
+第二次：PATH_PREFIX =  "/zh-cn/3/library/"
+"""
+PATH_PREFIX =  "/zh-cn/3/library/"
 UA = "rag-hybrid-retrieval-qa/0.1 (learning project; contact: 2596468147@qq.com)"  #UA 字符串，用于标识请求来源
 
 def session() -> requests.Session:

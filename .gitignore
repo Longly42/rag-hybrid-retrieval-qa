@@ -21,6 +21,12 @@ data/raw/
 data/processed/
 # 但 data/urls.txt 是抓取清单，体积小、有溯源价值，保留进 Git
 
+# 切分后的语料，可由 crawl.py + parse.py 重建，不入库
+data/corpus.jsonl
+# 调试时用 --out 试跑产生的临时文件（约定下划线开头），同样不入库
+# 注意：不要写成 data/*.jsonl，第 3 步的评测集是人工标注成果，必须入库
+data/_*.jsonl
+
 # 向量库 / 索引文件
 models/
 *.faiss
