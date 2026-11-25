@@ -37,6 +37,7 @@ URL 的来源：
     python -m src.ingest.parse --format rst       # 只处理某种格式
     python -m src.ingest.parse --prefix /library/ # 按路径前缀筛（旧参数，保留）
     python -m src.ingest.parse --keep-toc         # 不丢弃目录页
+    python -m src.ingest.parse --report out.json  # 把统计写成 JSON，数字要留档
 """
 
 from __future__ import annotations #导入未来定义的类,作用：允许在类定义之前使用类名
@@ -45,6 +46,7 @@ import hashlib    #导入哈希模块用于生成文档的哈希值
 import json       #导入json模块用于处理json文件
 import re         #导入正则表达式模块
 import sys        #导入系统模块
+from datetime import datetime #导入时间模块用于给统计报告打时间戳
 from pathlib import Path #导入路径模块
 from urllib.parse import urlparse #导入urlparse模块用于解析url
 
@@ -677,6 +679,8 @@ def main() -> None:
     ap.add_argument("--min-page-chars", type=int, default=MIN_PAGE_CHARS,
                     help=f"整页正文低于此值丢弃，默认 {MIN_PAGE_CHARS}")
     ap.add_argument("--keep-toc", action="store_true", help="保留只有链接的目录页")
+    ap.add_argument("--report", default=None,
+                    help="把本次统计写成 JSON（篇数/chunk/长度分位/各站各栏目/丢弃原因）")
     args = ap.parse_args()
 
     # 递归扫，不再限定 *.html —— raw 现在是「格式/域名/路径」三层结构
@@ -755,10 +759,14 @@ def main() -> None:
     code_chunks = sum(1 for c in kept if c["has_code"])
     too_short = sum(1 for c in kept if c["char_len"] < 120)
 
+    def quantile(q: float) -> int:
+        """按位置取分位数。语料只有一万多块，插值那点精度没有意义。"""
+        return lens[min(len(lens) - 1, int(len(lens) * q))] if lens else 0
+
     print(f"\n完成：{docs} 篇 → {len(kept)} 个 chunk，写入 {out}")
     if lens:
         print(f"字符数：平均 {total_chars // len(lens)}，中位 {lens[len(lens) // 2]}，"
-              f"p90 {lens[int(len(lens) * 0.9)]}，max {lens[-1]}")
+              f"p90 {quantile(0.9)}，max {lens[-1]}")
         print(f"含代码的 chunk：{code_chunks} 个（{code_chunks * 100 // len(lens)}%）")
         print(f"短于 120 字符的 chunk：{too_short} 个")
 
@@ -788,13 +796,15 @@ def main() -> None:
             docs_n = len({c["doc_id"] for c in kept if (c["section"] or "(根)") == sec})
             print(f"  {sec:<12} {docs_n:>4} 篇  {len(lens_):>5} chunk  中位 {sorted(lens_)[len(lens_) // 2]} 字")
 
+    # 丢弃原因先归组，打印和写报告共用这一份，避免两处口径不一致
+    skipped_by_reason: dict[str, list[tuple[str, str]]] = {}
+    for rel, u, why in skipped:
+        skipped_by_reason.setdefault(why, []).append((rel, u))
+
     print(f"\n跳过 {len(skipped)} 篇")
-    if skipped:
+    if skipped_by_reason:
         # 按原因分组，比逐条列 260 行有用得多
-        reasons: dict[str, list[tuple[str, str]]] = {}
-        for rel, u, why in skipped:
-            reasons.setdefault(why, []).append((rel, u))
-        for why, items in sorted(reasons.items(), key=lambda kv: -len(kv[1])):
+        for why, items in sorted(skipped_by_reason.items(), key=lambda kv: -len(kv[1])):
             print(f"  {len(items):>3} 篇  {why}")
             for rel, u in items[:4]:
                 print(f"        {rel}")
@@ -814,6 +824,70 @@ def main() -> None:
     if not_in_urls:
         print(f"\n[提示] {not_in_urls} 篇的 URL 不在 data/urls.txt 里 —— "
               f"可能是直接放进去的样本，也可能是 urls.txt 没跟着更新。")
+
+    # ---------- 统计报告 ----------
+    # 屏幕上的数字关掉终端就没了，报告落到盘上才算证据。
+    # 后面「改了切分参数有没有变好」靠它对比，不用重跑再靠记忆。
+    if args.report:
+        # 语料指纹：光看篇数和 chunk 数不够，改了排序或字段也会「数字一样、内容不同」。
+        # 有这个哈希，重跑之后一句「一样 / 不一样」就有依据。
+        digest = hashlib.sha256(out.read_bytes()).hexdigest()
+        report = {
+            "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "corpus_file": out.as_posix(),
+            "corpus_sha256": digest,
+            "params": {
+                "chunk_max": CHUNK_MAX,
+                "chunk_overlap": CHUNK_OVERLAP,
+                "min_page_chars": args.min_page_chars,
+                "min_chunk_chars": MIN_CHUNK_CHARS,
+                "code_max": CODE_MAX,
+                "keep_toc": bool(args.keep_toc),
+            },
+            "files_scanned": len(files),
+            "docs": docs,
+            "chunks": len(kept),
+            "chars_total": total_chars,
+            "chars": {
+                "avg": total_chars // len(lens) if lens else 0,
+                "median": quantile(0.5),
+                "p90": quantile(0.9),
+                "max": lens[-1] if lens else 0,
+            },
+            "code_chunks": code_chunks,
+            "code_pct": code_chunks * 100 // len(lens) if lens else 0,
+            "short_lt120": too_short,
+            "short_pct": too_short * 100 // len(lens) if lens else 0,
+            "by_format": dict(sorted(by_fmt.items())),
+            "by_site": {
+                s: {
+                    "docs": len({c["doc_id"] for c in kept if c["site"] == s}),
+                    "chunks": len(ls),
+                    "median": sorted(ls)[len(ls) // 2],
+                }
+                for s, ls in sorted(by_site.items(), key=lambda kv: -len(kv[1]))
+            },
+            "by_section": {
+                (sec or "(根)"): {
+                    "docs": len({c["doc_id"] for c in kept if (c["section"] or "(根)") == sec}),
+                    "chunks": len(ls),
+                    "median": sorted(ls)[len(ls) // 2],
+                }
+                for sec, ls in sorted(by_section.items(), key=lambda kv: -len(kv[1]))
+            },
+            "skipped_total": len(skipped),
+            "skipped_by_reason": {why: len(items) for why, items in skipped_by_reason.items()},
+            "skipped": [{"path": rel, "url": u, "reason": why} for rel, u, why in skipped],
+            "replaced_by_format": len(replaced),
+            "unknown_hosts": unknowns,
+            "urls_list_total": len(expected),
+            "urls_not_in_list": not_in_urls,
+        }
+        rp = Path(args.report)
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        rp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"\n统计报告：{rp}")
+
 
 if __name__ == "__main__":
     main()

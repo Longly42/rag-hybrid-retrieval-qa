@@ -2,7 +2,13 @@
 
 > 基于 BM25 + 向量混合检索（RRF 融合）与 Cross-Encoder 重排的检索增强问答系统。
 
-**状态：开发中。** 2026-11-20 起从零实现。当前仓库里只有工程骨架和抓取脚本，**没有检索代码，没有任何实测数据**。
+**状态：开发中。** 2026-11-20 起从零实现。当前已打通「抓取 → 解析切分 → BM25 检索」一段：16,378 个 chunk、查询延迟 0.4 ~ 0.8 ms（实测），向量召回、融合、重排、评测均未开始。
+
+跑一次检索：
+
+```bash
+./venv/Scripts/python.exe scripts/search.py        # 建/读索引 → 示例查询 → 交互模式
+```
 
 进度、技术决策、踩坑记录见 [PROGRESS.md](PROGRESS.md)——那份文件是给「下一个人（或下一个 AI 会话）」看的，这份是给外面看的。
 
@@ -67,7 +73,8 @@ RRF 只用排名不用分数，是因为两路分数不同量纲（BM25 无上�
 │   │   ├── parse.py    # 统一调度，打包成 chunk
 │   │   ├── formats.py  # 格式探测 + rst/md/纯文本解析
 │   │   └── layout.py   # raw 的目录约定，crawl 与 parse 共用一个实现
-│   └── retrieval/      # bm25.py 检索实现（待写）
+│   └── retrieval/
+│       └── bm25.py     # 手写 BM25：倒排索引 + Okapi 打分 + jieba 分词
 ├── scripts/            # 一次性入口脚本（含 raw 目录迁移）
 ├── experiments.md      # 指标流水账
 └── PROGRESS.md         # 交接文档

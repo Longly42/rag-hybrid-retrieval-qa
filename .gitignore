@@ -26,6 +26,10 @@ data/corpus.jsonl
 # 调试时用 --out 试跑产生的临时文件（约定下划线开头），同样不入库
 # 注意：不要写成 data/*.jsonl，第 3 步的评测集是人工标注成果，必须入库
 data/_*.jsonl
+data/_*.json
+
+# BM25 倒排索引缓存，可由 corpus.jsonl 秒级重建，不入库
+data/index/
 
 # 向量库 / 索引文件
 models/

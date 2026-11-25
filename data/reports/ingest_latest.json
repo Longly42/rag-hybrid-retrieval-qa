@@ -1,0 +1,293 @@
+{
+  "generated_at": "2026-11-24T21:56:57+08:00",
+  "corpus_file": "E:/workcode/rag-hybrid-retrieval-qa/data/corpus.jsonl",
+  "corpus_sha256": "638177be70a5718309b91f6b438283eedff9c0e379f0ec2740738ced8b819c12",
+  "params": {
+    "chunk_max": 600,
+    "chunk_overlap": 90,
+    "min_page_chars": 200,
+    "min_chunk_chars": 60,
+    "code_max": 1500,
+    "keep_toc": false
+  },
+  "files_scanned": 619,
+  "docs": 584,
+  "chunks": 16378,
+  "chars_total": 5683747,
+  "chars": {
+    "avg": 347,
+    "median": 346,
+    "p90": 593,
+    "max": 615
+  },
+  "code_chunks": 2811,
+  "code_pct": 17,
+  "short_lt120": 3006,
+  "short_pct": 18,
+  "by_format": {
+    "html": 12646,
+    "md": 3732
+  },
+  "by_site": {
+    "docs.python.org": {
+      "docs": 259,
+      "chunks": 9447,
+      "median": 305
+    },
+    "github.com": {
+      "docs": 195,
+      "chunks": 3732,
+      "median": 468
+    },
+    "docs.djangoproject.com": {
+      "docs": 130,
+      "chunks": 3199,
+      "median": 299
+    }
+  },
+  "by_section": {
+    "library": {
+      "docs": 243,
+      "chunks": 9144,
+      "median": 297
+    },
+    "jackfrued__Python-100-Days": {
+      "docs": 115,
+      "chunks": 2547,
+      "median": 488
+    },
+    "topics": {
+      "docs": 50,
+      "chunks": 1350,
+      "median": 368
+    },
+    "vuejs-translations__docs-zh-cn": {
+      "docs": 80,
+      "chunks": 1185,
+      "median": 422
+    },
+    "ref": {
+      "docs": 25,
+      "chunks": 1021,
+      "median": 184
+    },
+    "howto": {
+      "docs": 23,
+      "chunks": 322,
+      "median": 373
+    },
+    "tutorial": {
+      "docs": 16,
+      "chunks": 303,
+      "median": 473
+    },
+    "intro": {
+      "docs": 13,
+      "chunks": 248,
+      "median": 445
+    },
+    "internals": {
+      "docs": 8,
+      "chunks": 182,
+      "median": 491
+    },
+    "faq": {
+      "docs": 8,
+      "chunks": 49,
+      "median": 156
+    },
+    "misc": {
+      "docs": 3,
+      "chunks": 27,
+      "median": 100
+    }
+  },
+  "skipped_total": 35,
+  "skipped_by_reason": {
+    "正文 < 200 字符（目录页/存根页）": 10,
+    "只有链接的目录页": 20,
+    "正文 < 200 字符": 4,
+    "canonical 缺失，无法确认这页是谁": 1
+  },
+  "skipped": [
+    {
+      "path": "html/docs.djangoproject.com/zh-hans/5.2/ref/files.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.djangoproject.com/zh-hans/5.2/ref/forms.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.djangoproject.com/zh-hans/5.2/ref/models.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.djangoproject.com/zh-hans/5.2/topics/db/examples.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.djangoproject.com/zh-hans/5.2/topics/db.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.djangoproject.com/zh-hans/5.2/topics/http/generic-views.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.djangoproject.com/zh-hans/5.2/topics/http.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.python.org/3/library/archiving.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/binary.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/cmdline.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/cmdlinelibs.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/concurrent.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.python.org/3/library/crypto.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/distribution.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/fileformats.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/filesys.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/functional.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/i18n.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/ipc.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/language.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/mm.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.python.org/3/library/modules.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/numeric.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/removed.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/security_warnings.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/text.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/unix.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/urllib.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "html/docs.python.org/3/library/windows.html",
+      "url": "",
+      "reason": "只有链接的目录页"
+    },
+    {
+      "path": "html/docs.python.org/3/library/xmlrpc.html",
+      "url": "",
+      "reason": "正文 < 200 字符（目录页/存根页）"
+    },
+    {
+      "path": "md/github.com/jackfrued__Python-100-Days/Day46-60/59.单元测试.md",
+      "url": "",
+      "reason": "正文 < 200 字符"
+    },
+    {
+      "path": "md/github.com/jackfrued__Python-100-Days/Day46-60/60.项目上线.md",
+      "url": "",
+      "reason": "正文 < 200 字符"
+    },
+    {
+      "path": "md/github.com/jackfrued__Python-100-Days/Day61-65/62.用Python解析HTML页面-2.md",
+      "url": "",
+      "reason": "canonical 缺失，无法确认这页是谁"
+    },
+    {
+      "path": "md/github.com/jackfrued__Python-100-Days/Day91-100/100.补充内容.md",
+      "url": "",
+      "reason": "正文 < 200 字符"
+    },
+    {
+      "path": "md/github.com/vuejs-translations__docs-zh-cn/src/api/index.md",
+      "url": "",
+      "reason": "正文 < 200 字符"
+    }
+  ],
+  "replaced_by_format": 0,
+  "unknown_hosts": {},
+  "urls_list_total": 618,
+  "urls_not_in_list": 1
+}

@@ -20,6 +20,7 @@
     python -m src.ingest.crawl --source python-library --discover   # 只探测，写完清单
     python -m src.ingest.crawl --source python-library --limit 3    # 抓 3 篇（验收用）
     python -m src.ingest.crawl --source python-library              # 全量抓，断点续爬
+    python -m src.ingest.crawl --source python-library --from-urls   # 按清单重建（不探测）
     python -m src.ingest.crawl --source django-rst --limit 2        # 抓 Django 的 rst 源
 """
 
@@ -331,16 +332,59 @@ def canonical_of(html: bytes) -> str:
     return ""
 
 
+def items_from_urls(name: str) -> list[dict]:
+    """不联网重建待抓条目：直接读本源已落盘的清单。
+
+    为什么需要这件事：
+        catalog 源的 discover 只能拿到「当前目录页上挂着的链接」。Django 是分栏目
+        抓的（topics / ref / howto 各跑一次），每次 discover 只返回当前栏目的几十条，
+        清单里另外一百多篇根本不在返回结果里。结果就是：raw 被删掉之后，只靠
+        discover 重跑会少一百多篇，而且一句报错都没有 —— 你在 parse 的报告里
+        看到篇数变少，会先怀疑代码，其实只是没抓。
+        build.py 要的「一条命令从零重建」，前提是按清单重下，而不是重新猜清单。
+
+    github 源例外：清单里存的是仓库页面地址，真正的下载地址（raw CDN 直链）
+    要过 API 拿，没有 API 就拼不出来，所以那类源仍然走 discover。它们的条目数
+    由仓库文件树决定，重新探测也不会少。
+    """
+    fmt = SOURCES[name]["fmt"]
+    rewrite = SOURCES[name].get("rewrite")
+    path = URLS_DIR / f"{name}.txt"
+    if not path.exists():
+        return []
+
+    items: list[dict] = []
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        page = ln.strip()
+        if not page:
+            continue
+        items.append({"page": page, "fetch": rewrite(page) if rewrite else page, "fmt": fmt})
+    return items
+
+
 def fetch_all(name: str, limit: int | None = None, force: bool = False,
-              replace: bool = False) -> None:
-    """下载一个源的全部条目，已落地的自动跳过（断点续爬）。"""
+              replace: bool = False, from_urls: bool = False) -> dict:
+    """下载一个源的全部条目，已落地的自动跳过（断点续爬）。
+
+    from_urls=True 时不探测目录页，按 data/urls/{源}.txt 重建 —— 复原语料用这个，
+    扩充语料才需要重新探测。
+    """
     src = SOURCES[name]
-    items = discover(src)
-    if not items:
-        sys.exit(f"源 {name} 没发现任何链接。检查 selector / path_prefix / 仓库名。")
+    rebuilt = from_urls and src["kind"] == "catalog"
+    if rebuilt:
+        items = items_from_urls(name)
+        if items:
+            print(f"  按清单重建 {len(items)} 条（不探测目录页）")
+        else:
+            print(f"  [提示] {name} 还没有清单，改为探测目录页")
+            rebuilt = False
+    if not rebuilt:
+        items = discover(src)
+        if not items:
+            sys.exit(f"源 {name} 没发现任何链接。检查 selector / path_prefix / 仓库名。")
+        write_urls(name, items, replace)
     if limit:
         items = items[:limit]
-    write_urls(name, items, replace)
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     manifest = load_manifest()
@@ -441,6 +485,11 @@ def fetch_all(name: str, limit: int | None = None, force: bool = False,
         for page, why in failed[:5]:
             print(f"  {page}\n    {why}")
 
+    # 返回计数，给 scripts/build.py 汇总用。只打印不返回的话，
+    # 上层想知道「这次到底抓成功几篇」只能去截自己的 stdout，太脆。
+    return {"source": name, "planned": len(items), "got": got,
+            "skipped": skipped, "failed": failed, "warns": warns}
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -453,6 +502,8 @@ def main() -> None:
     ap.add_argument("--force", action="store_true", help="已存在的也重抓")
     ap.add_argument("--replace", action="store_true",
                     help="重置本源清单（默认与已有清单合并，换栏目抓的时候别加这个）")
+    ap.add_argument("--from-urls", action="store_true",
+                    help="不探测目录页，按 data/urls/{源}.txt 重建（复原语料用）")
     args = ap.parse_args()
 
     if args.sources or not args.source:
@@ -482,7 +533,7 @@ def main() -> None:
                   "或者 path_prefix 是否把链接全过滤掉了。")
         return
 
-    fetch_all(args.source, args.limit, args.force, args.replace)
+    fetch_all(args.source, args.limit, args.force, args.replace, args.from_urls)
 
 
 if __name__ == "__main__":

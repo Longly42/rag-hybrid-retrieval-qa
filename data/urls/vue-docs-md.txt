@@ -12,6 +12,7 @@ https://github.com/vuejs-translations/docs-zh-cn/blob/main/src/api/composition-a
 https://github.com/vuejs-translations/docs-zh-cn/blob/main/src/api/custom-elements.md
 https://github.com/vuejs-translations/docs-zh-cn/blob/main/src/api/custom-renderer.md
 https://github.com/vuejs-translations/docs-zh-cn/blob/main/src/api/general.md
+https://github.com/vuejs-translations/docs-zh-cn/blob/main/src/api/index.md
 https://github.com/vuejs-translations/docs-zh-cn/blob/main/src/api/options-composition.md
 https://github.com/vuejs-translations/docs-zh-cn/blob/main/src/api/options-lifecycle.md
 https://github.com/vuejs-translations/docs-zh-cn/blob/main/src/api/options-misc.md
