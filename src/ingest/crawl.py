@@ -24,7 +24,7 @@
     python -m src.ingest.crawl --source django-rst --limit 2        # 抓 Django 的 rst 源
 """
 
-from __future__ import annotations  #解释这一行：启用未来风格的类型注解，允许在定义类型注解时使用尚未在当前 Python 版本中引入的特性
+from __future__ import annotations  #启用未来风格的类型注解，允许在定义类型注解时使用尚未在当前 Python 版本中引入的特性
 import argparse         #argparse 模块用于解析命令行参数和选项
 import json             #json 模块用于读写 manifest
 import sys              #sys 模块提供对解释器使用或维护的一些变量和函数的访问
