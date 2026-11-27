@@ -32,6 +32,8 @@ sys.path.insert(0, str(ROOT))                #将项目根目录添加到sys.pat
 
 from scripts.search import get_index, load_corpus  # noqa: E402，导入search.py中的get_index和load_corpus函数
 from src.retrieval.bm25 import tokenize  # noqa: E402，导入tokenize函数
+from src.retrieval.vector import VectorIndex  # noqa: E402，向量检索（模型懒加载，import 本身不重）
+from src.retrieval.fuse import RRFFusion  # noqa: E402，RRF 融合
 
 CORPUS = ROOT / "data" / "corpus.jsonl"   #定义语料库文件路径
 EVAL = ROOT / "data" / "eval" / "qa.jsonl"   #定义评测集文件路径
@@ -77,6 +79,30 @@ def load_eval(path: Path) ->list[dict]:
         if dangling:
             sys.exit(f"{r['qid']} 的 relevant 引用了不存在的 chunk_id：{dangling}")
     return items   #返回评测集数据列表
+
+def build_retriever(args, rows: list[dict], corpus_path: Path):
+    """按 --mode 返回一个「有 search(query, k) 的东西」。
+
+    三种模式返回的是完全不同的类型：BM25Index / VectorIndex / RRFFusion，
+    但 evaluate() 一行都不用改 —— 这就是把签名对齐的回报。
+    """
+    if args.mode == "bm25":
+        idx, ms, cached = get_index(rows, corpus_path, args.k1, args.b, rebuild=args.rebuild)
+        print(f"BM25 语料 {len(rows)} 篇 / 词表 {len(idx.postings)} / k1={idx.k1} b={idx.b}")
+        print(f"  索引{'来自缓存' if cached else '已重建'}，{ms:.0f} ms")
+        return idx
+
+    if args.mode == "vector":
+        vi = VectorIndex.load()
+        print(f"向量表 {vi.emb.shape[0]} 行 × {vi.emb.shape[1]} 维")
+        return vi
+
+    idx, ms, cached = get_index(rows, corpus_path, args.k1, args.b, rebuild=args.rebuild)
+    vi = VectorIndex.load()
+    print(f"BM25 词表 {len(idx.postings)} / 向量表 {vi.emb.shape[0]} 行")
+    print(f"融合 RRF k={args.rrf_k}，每路取 {args.depth} 条")
+    return RRFFusion([idx, vi], k=args.rrf_k, depth=args.depth)
+
 
 def evaluate(idx, items: list[dict], k: int) -> list[dict]:
     """跑完所有 query，返回逐条明细。
@@ -160,21 +186,26 @@ def main()-> None:
     ap.add_argument("--corpus", default=str(CORPUS), help="语料路径")
     ap.add_argument("--k1", type=float, default=1.5)
     ap.add_argument("--b", type=float, default=0.75)
+    ap.add_argument("--mode", choices=("bm25", "vector", "rrf"), default="bm25",
+                    help="检索模式：纯 BM25 / 纯向量 / 两路 RRF 融合")
+    ap.add_argument("--depth", type=int, default=50, help="RRF 每路取多少条参与融合")
+    ap.add_argument("--rrf-k", type=int, default=60, help="RRF 的 k 常数，一般不动")
     ap.add_argument("--rebuild", action="store_true", help="忽略缓存重建索引")
     args = ap.parse_args()
 
     corpus_path = Path(args.corpus)  #获取语料路径
     items = load_eval(Path(args.eval)) #获取评测集数据
-
     rows = load_corpus(corpus_path)   #获取语料库数据
-    idx, ms, cached = get_index(rows, corpus_path, args.k1, args.b, rebuild=args.rebuild)
-    print(f"语料 {len(rows)} 篇 / 词表 {len(idx.postings)} / k1={idx.k1} b={idx.b}")
-    print(f"索引{'来自缓存' if cached else '已重建'}，{ms:.0f} ms")
 
-    # 不预热的话 jieba 首次加载的 0.4s 会记在第一条 query 上，
-    # 那条耗时直接污染 p95
+    retriever = build_retriever(args, rows, corpus_path)
+    print(f"模式 {args.mode}")
+
+    # 不预热的话 jieba 首次加载的 0.4s、模型首次 encode 的 5s，
+    # 都会记在第一条 query 上，那条耗时直接污染 p95
     tokenize("预热")
-    report(evaluate(idx, items, args.k), args.k)
+    retriever.search("预热", 1)
+
+    report(evaluate(retriever, items, args.k), args.k)
 
 
 if __name__ == "__main__":
