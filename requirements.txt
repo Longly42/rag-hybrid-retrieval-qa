@@ -1,4 +1,20 @@
+# ---------- 数据管道 ----------
 requests
 beautifulsoup4
 lxml
 jieba
+
+# ---------- 向量检索 ----------
+numpy
+sentence-transformers
+
+# torch 故意不写在这里，因为 Windows 上装错版本不会报错、只会静默降级：
+#   PyPI 上的 torch 轮子是 CPU-only 的，pip install torch 装完
+#   torch.cuda.is_available() 返回 False，代码照跑，只是慢十倍。
+# 正确装法（cu128，对应 RTX 40 系 + 驱动 616）：
+#   pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+# 或者用国内镜像下好的轮子（快一倍）：
+#   curl -L -C - -o torch.whl ^
+#     https://mirrors.aliyun.com/pytorch-wheels/cu128/torch-2.9.1%2Bcu128-cp312-cp312-win_amd64.whl
+#   pip install --no-deps torch.whl
+# 装完必须跑一遍 scripts/check_env.py，四条全过才算环境就位。
