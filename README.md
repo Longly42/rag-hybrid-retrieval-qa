@@ -64,6 +64,21 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
+**torch 要单独装，不要用 `pip install torch`。** PyPI 上 Windows 的轮子是 CPU-only 的，
+装完 `torch.cuda.is_available()` 返回 `False` 但不会报任何错，只是编码慢十倍。正确装法：
+
+```bash
+pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+```
+
+装完跑一遍自检，四道关（设备 / 输出维度 / 自洽性 / 语义区分度）全过才算环境就位：
+
+```bash
+python scripts/check_env.py
+```
+
+模型权重默认下载到 `models/hf`（已 gitignore），走 `HF_ENDPOINT=https://hf-mirror.com` 镜像。
+
 ### 2. 一键跑通 BM25 检索
 
 体验基于字面精准匹配的倒排索引检索效果：
@@ -99,7 +114,8 @@ python scripts/search.py "SESSION_COOKIE_DOMAIN 不生效" -k 3
 ├── src/
 │   ├── ingest/         # 数据管道：多源抓取、格式解析、切分清洗
 │   └── retrieval/      # 检索内核：手写 BM25、倒排索引、分词
-├── scripts/            # 入口脚本：索引构建、检索测试、评测等
+├── scripts/            # 入口脚本：索引构建、检索测试、评测、环境自检等
+├── models/             # 模型权重与 HF 缓存（不入库，删了自动重下）
 └── experiments.md      # 实验记录与指标流水账
 ```
 
