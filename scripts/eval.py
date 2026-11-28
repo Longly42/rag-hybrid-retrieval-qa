@@ -15,6 +15,7 @@
     python scripts/eval.py                 # 默认 k=5，读 data/eval/qa.jsonl
     python scripts/eval.py -k 10            # 改截断位置
     python scripts/eval.py --k1 1.2         # 试另一组 BM25 参数
+    python scripts/eval.py --mode rrf_rerank  # RRF 初筛 + cross-encoder 重排
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from scripts.search import get_index, load_corpus  # noqa: E402，导入search.p
 from src.retrieval.bm25 import tokenize  # noqa: E402，导入tokenize函数
 from src.retrieval.vector import VectorIndex  # noqa: E402，向量检索（模型懒加载，import 本身不重）
 from src.retrieval.fuse import RRFFusion  # noqa: E402，RRF 融合
+from src.retrieval.rerank import Reranker, load_texts  # noqa: E402，cross-encoder 重排
 
 CORPUS = ROOT / "data" / "corpus.jsonl"   #定义语料库文件路径
 EVAL = ROOT / "data" / "eval" / "qa.jsonl"   #定义评测集文件路径
@@ -83,7 +85,7 @@ def load_eval(path: Path) ->list[dict]:
 def build_retriever(args, rows: list[dict], corpus_path: Path):
     """按 --mode 返回一个「有 search(query, k) 的东西」。
 
-    三种模式返回的是完全不同的类型：BM25Index / VectorIndex / RRFFusion，
+    四种模式返回的是完全不同的类型：BM25Index / VectorIndex / RRFFusion / Reranker，
     但 evaluate() 一行都不用改 —— 这就是把签名对齐的回报。
     """
     if args.mode == "bm25":
@@ -101,7 +103,17 @@ def build_retriever(args, rows: list[dict], corpus_path: Path):
     vi = VectorIndex.load()
     print(f"BM25 词表 {len(idx.postings)} / 向量表 {vi.emb.shape[0]} 行")
     print(f"融合 RRF k={args.rrf_k}，每路取 {args.depth} 条")
-    return RRFFusion([idx, vi], k=args.rrf_k, depth=args.depth)
+    rrf = RRFFusion([idx, vi], k=args.rrf_k, depth=args.depth)
+
+    if args.mode == "rrf_rerank":
+        # 正文只建一次，20 条 query 共用同一份 dict；重排要原文字
+        rr = Reranker(rrf, load_texts(corpus_path, with_title=not args.no_title), depth=args.depth)
+        print(f"重排池 {args.depth} 对 → cross-encoder，"
+              f"max_length={rr.max_length} batch={rr.batch_size} "
+              f"标题上下文={'关' if args.no_title else '开'}")
+        return rr
+
+    return rrf
 
 
 def evaluate(idx, items: list[dict], k: int) -> list[dict]:
@@ -186,9 +198,12 @@ def main()-> None:
     ap.add_argument("--corpus", default=str(CORPUS), help="语料路径")
     ap.add_argument("--k1", type=float, default=1.5)
     ap.add_argument("--b", type=float, default=0.75)
-    ap.add_argument("--mode", choices=("bm25", "vector", "rrf"), default="bm25",
-                    help="检索模式：纯 BM25 / 纯向量 / 两路 RRF 融合")
-    ap.add_argument("--depth", type=int, default=50, help="RRF 每路取多少条参与融合")
+    ap.add_argument("--mode", choices=("bm25", "vector", "rrf", "rrf_rerank"), default="bm25",
+                    help="检索模式：纯 BM25 / 纯向量 / 两路 RRF / RRF 后接 cross-encoder 重排")
+    ap.add_argument("--depth", type=int, default=50,
+                    help="RRF 每路取多少条参与融合；rrf_rerank 模式下也是重排池大小")
+    ap.add_argument("--no-title", action="store_true",
+                    help="rrf_rerank 时不给 pair 拼标题上下文（A/B 对比用）")
     ap.add_argument("--rrf-k", type=int, default=60, help="RRF 的 k 常数，一般不动")
     ap.add_argument("--rebuild", action="store_true", help="忽略缓存重建索引")
     args = ap.parse_args()
